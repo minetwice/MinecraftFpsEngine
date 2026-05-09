@@ -1,0 +1,27 @@
+#version 310 es
+layout(local_size_x = 16, local_size_y = 16) in;
+
+// Input low-resolution texture (bound as sampler)
+layout(binding = 0) uniform sampler2D inputTex;
+
+// Output high-resolution image (write-only)
+layout(rgba8, binding = 1) uniform writeonly image2D outputImg;
+
+// Uniforms
+uniform vec2 invTexSize;   // 1.0 / (smallWidth, smallHeight)
+uniform vec2 scale;        // ratio = bigSize / smallSize
+
+void main() {
+    ivec2 outPos = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 outSize = imageSize(outputImg);
+    if (outPos.x >= outSize.x || outPos.y >= outSize.y) return;
+    
+    // Map output pixel to UV coordinate in low-res texture
+    vec2 uv = (vec2(outPos) + 0.5) / vec2(outSize);
+    vec2 sampleUV = uv * scale;
+    
+    // Bilinear sampling (hardware does it automatically with GL_LINEAR)
+    vec4 color = texture(inputTex, sampleUV);
+    
+    imageStore(outputImg, outPos, color);
+}
