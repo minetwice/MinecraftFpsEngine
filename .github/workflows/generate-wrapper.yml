@@ -1,72 +1,47 @@
 name: Generate Gradle Wrapper
 
 on:
-  workflow_dispatch:        # Manual trigger – click "Run workflow"
-  # push:                   # Uncomment to auto-run on push
+  workflow_dispatch:
 
 jobs:
   generate:
     runs-on: ubuntu-latest
     permissions:
-      contents: write        # Required to push changes
-
+      contents: write
+    
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Java 21 (optional, but good for validation)
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '21'
-
-      - name: Create Gradle wrapper directory
-        run: mkdir -p gradle/wrapper
-
-      - name: Download gradle-wrapper.jar
+      - uses: actions/checkout@v4
+      
+      - name: Create wrapper files
         run: |
-          # Use official Gradle distribution (version 8.10.2)
-          GRADLE_VERSION=8.10.2
-          curl -L "https://repo1.maven.org/maven2/org/gradle/gradle-wrapper/${GRADLE_VERSION}/gradle-wrapper-${GRADLE_VERSION}.jar" \
-            -o gradle/wrapper/gradle-wrapper.jar
-
-      - name: Create gradle-wrapper.properties
-        run: |
-          cat > gradle/wrapper/gradle-wrapper.properties << 'EOF'
+          mkdir -p gradle/wrapper
+          
+          # Download gradle-wrapper.jar from official source
+          curl -L -o gradle/wrapper/gradle-wrapper.jar \
+            "https://github.com/gradle/gradle/raw/v8.10.2/gradle/wrapper/gradle-wrapper.jar"
+          
+          # Create properties file
+          cat > gradle/wrapper/gradle-wrapper.properties <<EOF
           distributionBase=GRADLE_USER_HOME
           distributionPath=wrapper/dists
           distributionUrl=https\://services.gradle.org/distributions/gradle-8.10.2-bin.zip
           zipStoreBase=GRADLE_USER_HOME
           zipStorePath=wrapper/dists
           EOF
-
-      - name: Download gradlew script (Unix)
-        run: |
-          curl -L "https://raw.githubusercontent.com/gradle/gradle/v8.10.2/gradle/wrapper/gradle-wrapper.jar" \
-            -o gradlew 2>/dev/null || \
-          curl -L "https://raw.githubusercontent.com/gradle/gradle/v8.10.2/gradlew" -o gradlew
+          
+          # Download gradlew script
+          curl -L -o gradlew \
+            "https://github.com/gradle/gradle/raw/v8.10.2/gradlew"
           chmod +x gradlew
-
-      - name: Download gradlew.bat script (Windows)
-        run: |
-          curl -L "https://raw.githubusercontent.com/gradle/gradle/v8.10.2/gradlew.bat" -o gradlew.bat
-
-      - name: Check if files already exist (avoid empty commit)
-        id: check
-        run: |
-          git add gradlew gradlew.bat gradle/wrapper/
-          if git diff --staged --quiet; then
-            echo "changes=false" >> $GITHUB_OUTPUT
-          else
-            echo "changes=true" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Commit and push generated files
-        if: steps.check.outputs.changes == 'true'
+          
+          # Download gradlew.bat
+          curl -L -o gradlew.bat \
+            "https://github.com/gradle/gradle/raw/v8.10.2/gradlew.bat"
+      
+      - name: Commit and push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git commit -m "Add Gradle wrapper files (version 8.10.2)"
+          git add gradlew gradlew.bat gradle/wrapper/
+          git diff --staged --quiet || git commit -m "Add Gradle wrapper"
           git push origin HEAD:${{ github.ref_name }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
