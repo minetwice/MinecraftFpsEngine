@@ -1,50 +1,72 @@
 name: Generate Gradle Wrapper
 
 on:
-  workflow_dispatch:        # Manual trigger
+  workflow_dispatch:        # Manual trigger – click "Run workflow"
   # push:                   # Uncomment to auto-run on push
-  #   branches: [ main ]
 
 jobs:
   generate:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write        # Required to push changes
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Java 21
+      - name: Set up Java 21 (optional, but good for validation)
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: Download and install Gradle (temporary)
-        run: |
-          GRADLE_VERSION=8.10.2
-          wget https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip
-          unzip gradle-${GRADLE_VERSION}-bin.zip
-          # Move to /opt so it's in PATH for next steps
-          sudo mv gradle-${GRADLE_VERSION} /opt/gradle
-          echo "/opt/gradle/bin" >> $GITHUB_PATH
+      - name: Create Gradle wrapper directory
+        run: mkdir -p gradle/wrapper
 
-      - name: Generate Gradle wrapper files
+      - name: Download gradle-wrapper.jar
         run: |
-          # Run the wrapper task – this creates all files (gradlew, gradlew.bat, gradle-wrapper.jar, properties)
-          gradle wrapper --gradle-version 8.10.2
-          # Ensure gradlew is executable
+          # Use official Gradle distribution (version 8.10.2)
+          GRADLE_VERSION=8.10.2
+          curl -L "https://repo1.maven.org/maven2/org/gradle/gradle-wrapper/${GRADLE_VERSION}/gradle-wrapper-${GRADLE_VERSION}.jar" \
+            -o gradle/wrapper/gradle-wrapper.jar
+
+      - name: Create gradle-wrapper.properties
+        run: |
+          cat > gradle/wrapper/gradle-wrapper.properties << 'EOF'
+          distributionBase=GRADLE_USER_HOME
+          distributionPath=wrapper/dists
+          distributionUrl=https\://services.gradle.org/distributions/gradle-8.10.2-bin.zip
+          zipStoreBase=GRADLE_USER_HOME
+          zipStorePath=wrapper/dists
+          EOF
+
+      - name: Download gradlew script (Unix)
+        run: |
+          curl -L "https://raw.githubusercontent.com/gradle/gradle/v8.10.2/gradle/wrapper/gradle-wrapper.jar" \
+            -o gradlew 2>/dev/null || \
+          curl -L "https://raw.githubusercontent.com/gradle/gradle/v8.10.2/gradlew" -o gradlew
           chmod +x gradlew
 
-      - name: Remove temporary Gradle installation
-        run: sudo rm -rf /opt/gradle
+      - name: Download gradlew.bat script (Windows)
+        run: |
+          curl -L "https://raw.githubusercontent.com/gradle/gradle/v8.10.2/gradlew.bat" -o gradlew.bat
 
-      - name: Commit and push generated wrapper files
+      - name: Check if files already exist (avoid empty commit)
+        id: check
+        run: |
+          git add gradlew gradlew.bat gradle/wrapper/
+          if git diff --staged --quiet; then
+            echo "changes=false" >> $GITHUB_OUTPUT
+          else
+            echo "changes=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Commit and push generated files
+        if: steps.check.outputs.changes == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add gradlew gradlew.bat gradle/wrapper/
-          git diff --staged --quiet || git commit -m "Generate Gradle wrapper (version 8.10.2)"
+          git commit -m "Add Gradle wrapper files (version 8.10.2)"
           git push origin HEAD:${{ github.ref_name }}
         env:
-          # GITHUB_TOKEN already has write permissions by default
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
