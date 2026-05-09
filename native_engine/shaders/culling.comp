@@ -1,0 +1,31 @@
+#version 310 es
+layout(local_size_x = 64) in;
+
+// Entity world positions (x,y,z,w)
+layout(std430, binding = 0) buffer EntityPositions {
+    vec4 positions[];
+};
+
+// Output visibility: 1 = visible, 0 = culled
+layout(std430, binding = 1) buffer Visibility {
+    uint visible[];
+};
+
+// Camera matrices and frustum planes
+layout(std140, binding = 2) uniform CameraData {
+    mat4 viewProj;
+    vec4 frustumPlanes[6];
+};
+
+// Simple frustum test: transform to clip space and check boundaries
+bool isInside(vec4 worldPos) {
+    vec4 clip = viewProj * worldPos;
+    return (clip.x <= clip.w && clip.x >= -clip.w &&
+            clip.y <= clip.w && clip.y >= -clip.w &&
+            clip.z <= clip.w && clip.z >= 0.0);
+}
+
+void main() {
+    uint id = gl_GlobalInvocationID.x;
+    visible[id] = isInside(positions[id]) ? 1u : 0u;
+}
