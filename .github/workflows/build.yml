@@ -22,11 +22,12 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: Setup Android SDK (includes NDK)
+      # Install Android SDK + NDK (correct space-separated list)
+      - name: Setup Android SDK and NDK
         uses: android-actions/setup-android@v3
         with:
-          # Install NDK version 26.1.10909125
-          packages: platform-tools, platforms;android-33, build-tools;33.0.0, ndk;26.1.10909125
+          # Space-separated packages, no trailing commas
+          packages: platform-tools platforms;android-33 build-tools;33.0.0 ndk;26.1.10909125
 
       - name: Ensure Gradle wrapper
         run: |
@@ -48,30 +49,39 @@ jobs:
 
       - name: Build Native Engine
         run: |
-          # Find NDK path from ANDROID_SDK_ROOT/ndk
+          # NDK installed by setup-android at $ANDROID_SDK_ROOT/ndk/26.1.10909125
           NDK_HOME="${ANDROID_SDK_ROOT}/ndk/26.1.10909125"
           if [ ! -d "$NDK_HOME" ]; then
-            echo "NDK not found at $NDK_HOME"
+            echo "NDK not found at $NDK_HOME; trying alternative location..."
+            NDK_HOME="${ANDROID_HOME}/ndk/26.1.10909125"
+          fi
+          if [ ! -d "$NDK_HOME" ]; then
+            echo "ERROR: NDK not installed. Check setup-android step."
             exit 1
           fi
           echo "Using NDK at: $NDK_HOME"
 
+          # Detect engine directory
           if [ -d "native_engine" ]; then
             ENGINE_DIR="native_engine"
           elif [ -d "native-engine" ]; then
             ENGINE_DIR="native-engine"
           else
-            echo "No native engine folder"
+            echo "No native engine folder found"
             exit 1
           fi
 
           cd $ENGINE_DIR
           mkdir -p build && cd build
 
-          cmake -DCMAKE_TOOLCHAIN_FILE="$NDK_HOME/build/cmake/android.toolchain.cmake" \
+          # Set the toolchain file and compilers explicitly
+          TOOLCHAIN="$NDK_HOME/build/cmake/android.toolchain.cmake"
+          cmake -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN" \
                 -DANDROID_ABI=arm64-v8a \
                 -DANDROID_PLATFORM=android-24 \
                 -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_C_COMPILER="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" \
+                -DCMAKE_CXX_COMPILER="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++" \
                 ..
           make -j$(nproc)
 
@@ -80,6 +90,7 @@ jobs:
           cp $ENGINE_DIR/build/libfilter_engine.so app/src/main/jniLibs/arm64-v8a/
         env:
           ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
+          ANDROID_HOME: ${{ env.ANDROID_HOME }}
 
       - name: Build Java Agent
         run: |
