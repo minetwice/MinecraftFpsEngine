@@ -1,9 +1,59 @@
-name: Hello World
+name: Generate Gradle Wrapper
+
 on:
-  push:
-  workflow_dispatch:
+  workflow_dispatch:          # Manual trigger
+  push:                       # (Optional) automatic on push
+    branches: [ main, master ]
+
 jobs:
-  hello:
+  generate:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
     steps:
-      - run: echo "Workflow is working!"
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Java 21 (optional but good)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Create wrapper directory
+        run: mkdir -p gradle/wrapper
+
+      - name: Download gradle-wrapper.jar (official)
+        run: |
+          curl -L -o gradle/wrapper/gradle-wrapper.jar \
+            "https://github.com/gradle/gradle/raw/v8.10.2/gradle/wrapper/gradle-wrapper.jar"
+
+      - name: Create gradle-wrapper.properties
+        run: |
+          cat > gradle/wrapper/gradle-wrapper.properties <<EOF
+          distributionBase=GRADLE_USER_HOME
+          distributionPath=wrapper/dists
+          distributionUrl=https\://services.gradle.org/distributions/gradle-8.10.2-bin.zip
+          zipStoreBase=GRADLE_USER_HOME
+          zipStorePath=wrapper/dists
+          EOF
+
+      - name: Download gradlew (Unix script)
+        run: |
+          curl -L -o gradlew \
+            "https://github.com/gradle/gradle/raw/v8.10.2/gradlew"
+          chmod +x gradlew
+
+      - name: Download gradlew.bat (Windows script)
+        run: |
+          curl -L -o gradlew.bat \
+            "https://github.com/gradle/gradle/raw/v8.10.2/gradlew.bat"
+
+      - name: Commit and push generated files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add gradlew gradlew.bat gradle/wrapper/
+          git diff --staged --quiet || git commit -m "Add Gradle wrapper (version 8.10.2)"
+          git push origin HEAD:${{ github.ref_name }}
