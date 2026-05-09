@@ -22,61 +22,57 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      # Install Android SDK + NDK (correct space-separated list)
       - name: Setup Android SDK and NDK
         uses: android-actions/setup-android@v3
         with:
-          # Space-separated packages, no trailing commas
           packages: platform-tools platforms;android-33 build-tools;33.0.0 ndk;26.1.10909125
 
-      - name: Ensure Gradle wrapper
+      # -------------------------------------------------
+      # FORCE setup Gradle wrapper (overwrite existing)
+      # -------------------------------------------------
+      - name: Setup Gradle wrapper (force)
         run: |
-          if [ ! -f "gradlew" ]; then
-            mkdir -p gradle/wrapper
-            curl -L -o gradle/wrapper/gradle-wrapper.jar \
-              "https://github.com/gradle/gradle/raw/v8.10.2/gradle/wrapper/gradle-wrapper.jar"
-            printf '%s\n' \
-              'distributionBase=GRADLE_USER_HOME' \
-              'distributionPath=wrapper/dists' \
-              'distributionUrl=https\://services.gradle.org/distributions/gradle-8.10.2-bin.zip' \
-              'zipStoreBase=GRADLE_USER_HOME' \
-              'zipStorePath=wrapper/dists' \
-              > gradle/wrapper/gradle-wrapper.properties
-            curl -L -o gradlew "https://github.com/gradle/gradle/raw/v8.10.2/gradlew"
-            curl -L -o gradlew.bat "https://github.com/gradle/gradle/raw/v8.10.2/gradlew.bat"
-            chmod +x gradlew
-          fi
+          mkdir -p gradle/wrapper
+          # Download gradle-wrapper.jar from official source
+          curl -L -o gradle/wrapper/gradle-wrapper.jar \
+            "https://github.com/gradle/gradle/raw/v8.10.2/gradle/wrapper/gradle-wrapper.jar"
+          # Create properties file
+          cat > gradle/wrapper/gradle-wrapper.properties <<EOF
+          distributionBase=GRADLE_USER_HOME
+          distributionPath=wrapper/dists
+          distributionUrl=https\://services.gradle.org/distributions/gradle-8.10.2-bin.zip
+          zipStoreBase=GRADLE_USER_HOME
+          zipStorePath=wrapper/dists
+          EOF
+          # Download gradlew scripts
+          curl -L -o gradlew "https://github.com/gradle/gradle/raw/v8.10.2/gradlew"
+          curl -L -o gradlew.bat "https://github.com/gradle/gradle/raw/v8.10.2/gradlew.bat"
+          chmod +x gradlew
 
       - name: Build Native Engine
         run: |
-          # NDK installed by setup-android at $ANDROID_SDK_ROOT/ndk/26.1.10909125
           NDK_HOME="${ANDROID_SDK_ROOT}/ndk/26.1.10909125"
           if [ ! -d "$NDK_HOME" ]; then
-            echo "NDK not found at $NDK_HOME; trying alternative location..."
             NDK_HOME="${ANDROID_HOME}/ndk/26.1.10909125"
           fi
           if [ ! -d "$NDK_HOME" ]; then
-            echo "ERROR: NDK not installed. Check setup-android step."
+            echo "NDK not found"
             exit 1
           fi
-          echo "Using NDK at: $NDK_HOME"
+          echo "Using NDK: $NDK_HOME"
 
-          # Detect engine directory
           if [ -d "native_engine" ]; then
             ENGINE_DIR="native_engine"
           elif [ -d "native-engine" ]; then
             ENGINE_DIR="native-engine"
           else
-            echo "No native engine folder found"
+            echo "No native engine folder"
             exit 1
           fi
 
           cd $ENGINE_DIR
           mkdir -p build && cd build
-
-          # Set the toolchain file and compilers explicitly
-          TOOLCHAIN="$NDK_HOME/build/cmake/android.toolchain.cmake"
-          cmake -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN" \
+          cmake -DCMAKE_TOOLCHAIN_FILE="$NDK_HOME/build/cmake/android.toolchain.cmake" \
                 -DANDROID_ABI=arm64-v8a \
                 -DANDROID_PLATFORM=android-24 \
                 -DCMAKE_BUILD_TYPE=Release \
@@ -84,13 +80,9 @@ jobs:
                 -DCMAKE_CXX_COMPILER="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++" \
                 ..
           make -j$(nproc)
-
           cd ../..
           mkdir -p app/src/main/jniLibs/arm64-v8a
           cp $ENGINE_DIR/build/libfilter_engine.so app/src/main/jniLibs/arm64-v8a/
-        env:
-          ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
-          ANDROID_HOME: ${{ env.ANDROID_HOME }}
 
       - name: Build Java Agent
         run: |
@@ -98,10 +90,9 @@ jobs:
           mkdir -p out lib
           wget -q -O lib/asm-9.6.jar https://repo1.maven.org/maven2/org/ow2/asm/asm/9.6/asm-9.6.jar
           javac -cp "lib/*" -d out src/main/java/com/minefilter/agent/*.java
-          printf '%s\n' \
-            'Premain-Class: com.minefilter.agent.AgentMain' \
-            'Can-Redefine-Classes: true' \
-            'Can-Retransform-Classes: true' > manifest.txt
+          echo 'Premain-Class: com.minefilter.agent.AgentMain' > manifest.txt
+          echo 'Can-Redefine-Classes: true' >> manifest.txt
+          echo 'Can-Retransform-Classes: true' >> manifest.txt
           jar cfm agent.jar manifest.txt -C out/ .
           cd ..
           mkdir -p app/src/main/assets
