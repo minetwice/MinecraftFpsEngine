@@ -1,0 +1,153 @@
+name: Auto-Fix Bot 🤖
+
+on:
+  workflow_run:
+    workflows: ["Build Minecraft FPS Engine"]
+    types:
+      - completed
+    branches: [ main ]
+  workflow_dispatch:   # manual trigger bhi allow
+
+jobs:
+  analyze-and-fix:
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write      # to commit fixes
+      pull-requests: write # to create PR if needed
+      actions: read        # to download logs
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_branch }}
+
+      - name: Download build logs
+        uses: actions/download-artifact@v4
+        with:
+          name: build-logs
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+        continue-on-error: true
+
+      - name: Extract error message
+        id: error
+        run: |
+          # If logs artifact not found, use alternative API
+          if [ -f build-logs/*.txt ]; then
+            ERROR_LOG=$(cat build-logs/*.txt)
+          else
+            # Fetch last run logs via GitHub API
+            RUN_ID=${{ github.event.workflow_run.id }}
+            curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/runs/${RUN_ID}/jobs" > jobs.json
+            # Simple extraction (you can enhance)
+            ERROR_LOG=$(jq -r '.jobs[].steps[].conclusion' jobs.json | grep -i failure)
+          fi
+          echo "error_summary=${ERROR_LOG::500}" >> $GITHUB_OUTPUT
+
+      - name: Run Auto-Fix Script
+        id: fix
+        run: |
+          # Create a Python script that does the fixing
+          cat > auto_fix.py << 'EOF'
+          import os, re, sys, subprocess
+
+          error_text = os.getenv("ERROR_SUMMARY", "").lower()
+          fixed = False
+
+          # Fix 1: Missing gradle wrapper
+          if "wrapper" in error_text and "not found" in error_text:
+              print("🔧 Fixing: Missing Gradle wrapper")
+              subprocess.run(["mkdir", "-p", "gradle/wrapper"], check=False)
+              subprocess.run(["curl", "-L", "-o", "gradle/wrapper/gradle-wrapper.jar",
+                              "https://github.com/gradle/gradle/raw/v8.10.2/gradle/wrapper/gradle-wrapper.jar"], check=False)
+              subprocess.run(["curl", "-L", "-o", "gradlew",
+                              "https://github.com/gradle/gradle/raw/v8.10.2/gradlew"], check=False)
+              subprocess.run(["chmod", "+x", "gradlew"], check=False)
+              fixed = True
+
+          # Fix 2: Permission denied on gradlew
+          if "permission denied" in error_text and "gradlew" in error_text:
+              print("🔧 Fixing: gradlew permission")
+              subprocess.run(["chmod", "+x", "gradlew"], check=False)
+              fixed = True
+
+          # Fix 3: Java version mismatch
+          if "java version" in error_text or "unsupported class file version" in error_text:
+              print("🔧 Fixing: Java version")
+              # Write .java-version file for future builds
+              with open(".java-version", "w") as f:
+                  f.write("21")
+              fixed = True
+
+          # Fix 4: Android SDK missing
+          if "sdk.dir" in error_text or "android sdk" in error_text:
+              print("🔧 Fixing: Android SDK path")
+              with open("local.properties", "w") as f:
+                  f.write("sdk.dir=$ANDROID_HOME")
+              fixed = True
+
+          # Fix 5: CMake not found
+          if "cmake" in error_text and "not found" in error_text:
+              print("🔧 Fixing: CMake installation issue")
+              subprocess.run(["sudo", "apt", "update"], check=False)
+              subprocess.run(["sudo", "apt", "install", "-y", "cmake"], check=False)
+              fixed = True
+
+          # Fix 6: Outdated NDK
+          if "ndk" in error_text and "not found" in error_text:
+              print("🔧 Fixing: NDK installation")
+              # Add NDK setup to workflow (we'll modify YAML)
+              with open(".github/workflows/build.yml", "r") as f:
+                  content = f.read()
+              if "android-actions/setup-android" not in content:
+                  # Insert NDK setup step after Java setup
+                  new_step = '''
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26c
+'''
+                  content = content.replace("steps:", "steps:\n" + new_step)
+                  with open(".github/workflows/build.yml", "w") as f:
+                      f.write(content)
+                  fixed = True
+
+          # Fix 7: Gradle cache corruption
+          if "cache" in error_text and "corrupt" in error_text:
+              print("🔧 Fixing: Clear Gradle cache")
+              subprocess.run(["rm", "-rf", "~/.gradle/caches/"], check=False)
+              fixed = True
+
+          # Output result
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"fixed={str(fixed).lower()}\n")
+          EOF
+
+          python3 auto_fix.py
+        env:
+          ERROR_SUMMARY: ${{ steps.error.outputs.error_summary }}
+
+      - name: Commit fixes if any
+        if: steps.fix.outputs.fixed == 'true'
+        run: |
+          git config user.name "Auto-Fix Bot 🤖"
+          git config user.email "auto-fix-bot@github.com"
+          git add .
+          git diff --staged --quiet || git commit -m "🤖 Auto-fix: ${ERROR_SUMMARY}" \
+            -m "Fixed automatically by error recovery bot"
+          git push origin HEAD:${{ github.ref_name }}
+        env:
+          ERROR_SUMMARY: ${{ steps.error.outputs.error_summary }}
+
+      - name: Re-trigger main workflow
+        if: steps.fix.outputs.fixed == 'true'
+        run: |
+          curl -L -X POST \
+            -H "Accept: application/vnd.github.v3+json" \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            https://api.github.com/repos/${{ github.repository }}/actions/workflows/build.yml/dispatches \
+            -d '{"ref":"${{ github.ref_name }}"}'
