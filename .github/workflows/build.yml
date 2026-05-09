@@ -5,7 +5,7 @@ on:
     branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
-  workflow_dispatch:        # allow manual trigger
+  workflow_dispatch:
 
 jobs:
   build:
@@ -26,74 +26,113 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26c
+          add-to-path: false
+
       # ===================================================
-      # 1. Build Native Engine (C++ with CMake)
+      # 1. Build Native Engine (C++ with CMake + NDK)
       # ===================================================
       - name: Build Native Engine
         run: |
-          # Go into the native engine directory (underscore)
-          cd native_engine
-          # Create build folder
+          # Detect native engine folder (supports both underscore and hyphen)
+          if [ -d "native_engine" ]; then
+            ENGINE_DIR="native_engine"
+          elif [ -d "native-engine" ]; then
+            ENGINE_DIR="native-engine"
+          else
+            echo "❌ No native_engine or native-engine folder found"
+            ls -la
+            exit 1
+          fi
+          
+          echo "Building in $ENGINE_DIR"
+          cd $ENGINE_DIR
+          
+          # Create build directory
           mkdir -p build && cd build
-          # Configure with CMake (for Android ARM64)
-          cmake -DCMAKE_TOOLCHAIN_FILE=$ANDROID_HOME/ndk/26.1.10909125/build/cmake/android.toolchain.cmake \
+          
+          # Use NDK from environment
+          if [ -z "$ANDROID_NDK_HOME" ]; then
+            echo "❌ ANDROID_NDK_HOME not set"
+            exit 1
+          fi
+          
+          TOOLCHAIN="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake"
+          if [ ! -f "$TOOLCHAIN" ]; then
+            echo "❌ Toolchain not found at $TOOLCHAIN"
+            exit 1
+          fi
+          
+          # Configure CMake for Android ARM64
+          cmake -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN" \
                 -DANDROID_ABI=arm64-v8a \
+                -DANDROID_PLATFORM=android-24 \
                 -DCMAKE_BUILD_TYPE=Release \
                 ..
-          # Build the library
+          
+          # Build
           make -j$(nproc)
-          # Copy the compiled .so to the Android project's jniLibs folder
-          # (assuming app/src/main/jniLibs/arm64-v8a/ exists)
-          cd ../..  # back to repository root
+          
+          # Copy library to Android project
+          cd ../..
           mkdir -p app/src/main/jniLibs/arm64-v8a
-          cp native_engine/build/libfilter_engine.so app/src/main/jniLibs/arm64-v8a/
+          cp $ENGINE_DIR/build/libfilter_engine.so app/src/main/jniLibs/arm64-v8a/
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
 
       # ===================================================
-      # 2. Build Java Agent (plain Java JAR)
+      # 2. Build Java Agent
       # ===================================================
       - name: Build Java Agent
         run: |
           cd java_agent
-          # Compile the agent code
-          javac -cp ".:lib/*" src/main/java/com/minefilter/agent/*.java -d out/
-          # Create JAR with manifest
+          mkdir -p out
+          # Download ASM if not present (needed for bytecode manipulation)
+          if [ ! -f "lib/asm-9.6.jar" ]; then
+            mkdir -p lib
+            wget -O lib/asm-9.6.jar https://repo1.maven.org/maven2/org/ow2/asm/asm/9.6/asm-9.6.jar
+          fi
+          # Compile
+          javac -cp "lib/*" -d out src/main/java/com/minefilter/agent/*.java
+          # Create manifest
           echo "Premain-Class: com.minefilter.agent.AgentMain" > manifest.txt
           echo "Can-Redefine-Classes: true" >> manifest.txt
           echo "Can-Retransform-Classes: true" >> manifest.txt
+          # Package JAR
           jar cfm agent.jar manifest.txt -C out/ .
-          # Copy to Android assets
           cd ..
           mkdir -p app/src/main/assets
           cp java_agent/agent.jar app/src/main/assets/
 
       # ===================================================
-      # 3. Build Android Launcher App (Gradle)
+      # 3. Build Android App
       # ===================================================
       - name: Build Android App
         run: |
           cd app
-          # Make gradlew executable (if not already)
           chmod +x gradlew
-          # Build release APK
           ./gradlew assembleRelease --stacktrace
 
       # ===================================================
-      # 4. Upload build artifacts
+      # 4. Upload Artifacts
       # ===================================================
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: minefilter-launcher-release
+          name: minefilter-launcher
           path: app/build/outputs/apk/release/*.apk
 
-      - name: Upload Native Library (for debugging)
+      - name: Upload Native Library
         uses: actions/upload-artifact@v4
         with:
-          name: native-engine-lib
+          name: libfilter_engine.so
           path: native_engine/build/libfilter_engine.so
 
-      - name: Upload Java Agent JAR
+      - name: Upload Java Agent
         uses: actions/upload-artifact@v4
         with:
-          name: java-agent
+          name: agent.jar
           path: java_agent/agent.jar
