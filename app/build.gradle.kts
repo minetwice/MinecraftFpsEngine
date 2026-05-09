@@ -3,17 +3,20 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-val version = project.properties["mod_version"] as String? ?: "1.0.0"
-val versionCode = (project.properties["app_version_code"] as String? ?: "1").toInt()
+val version = project.properties["mod_version"] as? String ?: "1.0.0"
+val versionCode = (project.properties["app_version_code"] as? String ?: "1").toInt()
+val compileSdkVer = (project.properties["android.compileSdk"] as? String ?: "34").toInt()
+val minSdkVer = (project.properties["android.minSdk"] as? String ?: "24").toInt()
+val targetSdkVer = (project.properties["android.targetSdk"] as? String ?: "34").toInt()
 
 android {
     namespace = "com.minefilter.launcher"
-    compileSdk = project.properties["android.compileSdk"] as String?.toInt() ?: 34
+    compileSdk = compileSdkVer
 
     defaultConfig {
         applicationId = "com.minefilter.launcher"
-        minSdk = project.properties["android.minSdk"] as String?.toInt() ?: 24
-        targetSdk = project.properties["android.targetSdk"] as String?.toInt() ?: 34
+        minSdk = minSdkVer
+        targetSdk = targetSdkVer
         versionCode = versionCode
         versionName = version
 
