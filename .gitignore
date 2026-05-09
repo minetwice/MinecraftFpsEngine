@@ -1,0 +1,60 @@
+```
+# Build artifacts
+build/
+*.apk
+*.aar
+*.jar
+
+# Gradle
+.gradle/
+!gradle.properties
+!gradlew
+!gradlew.bat
+
+# Android
+*.ap_
+*.dex
+*.so
+*.dylib
+*.dll
+
+# Dependencies
+node_modules/
+.libs/
+lib/
+
+# Native build
+CMakeFiles/
+cmake-build*/
+Makefile
+ninja*
+compile_commands.json
+
+# Archives
+*.zip
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.7z
+*.rar
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+
+# Environment
+.env
+.env.local
+.env.*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+```
