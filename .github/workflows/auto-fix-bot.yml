@@ -1,4 +1,4 @@
-name: Auto-Fix Bot 🤖
+name: Error Analyzer Bot 🤖
 
 on:
   workflow_run:
@@ -6,148 +6,134 @@ on:
     types:
       - completed
     branches: [ main ]
-  workflow_dispatch:   # manual trigger bhi allow
+  workflow_dispatch:   # manual trigger bhi
 
 jobs:
-  analyze-and-fix:
-    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+  analyze:
     runs-on: ubuntu-latest
     permissions:
-      contents: write      # to commit fixes
-      pull-requests: write # to create PR if needed
-      actions: read        # to download logs
+      pull-requests: write
+      actions: read
+      contents: read
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.workflow_run.head_branch }}
 
       - name: Download build logs
         uses: actions/download-artifact@v4
         with:
-          name: build-logs
+          name: logs
           github-token: ${{ secrets.GITHUB_TOKEN }}
           run-id: ${{ github.event.workflow_run.id }}
         continue-on-error: true
 
-      - name: Extract error message
-        id: error
+      - name: Fetch error logs via API if artifact missing
+        id: fetch_logs
         run: |
-          # If logs artifact not found, use alternative API
-          if [ -f build-logs/*.txt ]; then
-            ERROR_LOG=$(cat build-logs/*.txt)
-          else
-            # Fetch last run logs via GitHub API
-            RUN_ID=${{ github.event.workflow_run.id }}
-            curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-              -H "Accept: application/vnd.github.v3+json" \
-              "https://api.github.com/repos/${{ github.repository }}/actions/runs/${RUN_ID}/jobs" > jobs.json
-            # Simple extraction (you can enhance)
-            ERROR_LOG=$(jq -r '.jobs[].steps[].conclusion' jobs.json | grep -i failure)
-          fi
-          echo "error_summary=${ERROR_LOG::500}" >> $GITHUB_OUTPUT
+          RUN_ID=${{ github.event.workflow_run.id }}
+          curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runs/${RUN_ID}/jobs" > jobs.json
+          # Extract step failure messages
+          jq -r '.jobs[].steps[] | select(.conclusion=="failure") | .name + ": " + .logs_url' jobs.json > error_summary.txt
+          cat error_summary.txt
+          echo "error_log=$(cat error_summary.txt | base64 -w 0)" >> $GITHUB_OUTPUT
 
-      - name: Run Auto-Fix Script
-        id: fix
+      - name: Analyze errors with Python
+        id: analyze
         run: |
-          # Create a Python script that does the fixing
-          cat > auto_fix.py << 'EOF'
-          import os, re, sys, subprocess
+          cat > analyze.py << 'EOF'
+          import re, sys, os
+          error_text = """${{ steps.fetch_logs.outputs.error_log }}"""
+          if not error_text:
+              error_text = os.getenv("ERROR_TEXT", "")
 
-          error_text = os.getenv("ERROR_SUMMARY", "").lower()
-          fixed = False
+          suggestions = []
+          error_type = "unknown"
 
-          # Fix 1: Missing gradle wrapper
-          if "wrapper" in error_text and "not found" in error_text:
-              print("🔧 Fixing: Missing Gradle wrapper")
-              subprocess.run(["mkdir", "-p", "gradle/wrapper"], check=False)
-              subprocess.run(["curl", "-L", "-o", "gradle/wrapper/gradle-wrapper.jar",
-                              "https://github.com/gradle/gradle/raw/v8.10.2/gradle/wrapper/gradle-wrapper.jar"], check=False)
-              subprocess.run(["curl", "-L", "-o", "gradlew",
-                              "https://github.com/gradle/gradle/raw/v8.10.2/gradlew"], check=False)
-              subprocess.run(["chmod", "+x", "gradlew"], check=False)
-              fixed = True
+          # Categorize errors
+          if re.search(r"gradlew.*not found|wrapper.*missing", error_text, re.I):
+              error_type = "missing_gradle_wrapper"
+              suggestions.append("🔧 Run `gradle wrapper` or run the 'Generate Gradle Wrapper' workflow.")
+              suggestions.append("📁 Ensure gradle/wrapper/gradle-wrapper.jar is committed.")
+          elif re.search(r"permission denied.*gradlew", error_text, re.I):
+              error_type = "gradlew_permission"
+              suggestions.append("🔧 Run `chmod +x gradlew` and commit.")
+          elif re.search(r"unsupported class file version|java version", error_text, re.I):
+              error_type = "java_version"
+              suggestions.append("☕ Use Java 17 or 21. Setup Java step should specify distribution 'temurin' version '17' or '21'.")
+          elif re.search(r"sdk.dir|ANDROID_HOME|android sdk not found", error_text, re.I):
+              error_type = "android_sdk_missing"
+              suggestions.append("📱 Add action 'android-actions/setup-android@v3' before build steps.")
+          elif re.search(r"cmake.*not found", error_text, re.I):
+              error_type = "cmake_missing"
+              suggestions.append("🛠️ Install CMake: `sudo apt update && sudo apt install cmake -y` or use GitHub's ubuntu-latest which includes it.")
+          elif re.search(r"ndk.*not found|NDK not configured", error_text, re.I):
+              error_type = "ndk_missing"
+              suggestions.append("📦 Setup NDK: add `uses: nttld/setup-ndk@v1` with `ndk-version: r26c`")
+          elif re.search(r"gradle.*dep.*cache|corrupt", error_text, re.I):
+              error_type = "gradle_cache"
+              suggestions.append("🗑️ Clear Gradle cache: `rm -rf ~/.gradle/caches/` or add `cache: false` in setup-java action.")
+          elif re.search(r"aapt2? not found|android resource", error_text, re.I):
+              error_type = "build_tools_missing"
+              suggestions.append("🔧 Install build-tools via SDK: `sdkmanager 'build-tools;34.0.0'`")
+          else:
+              suggestions.append("🤷 No common pattern detected. Check full logs: " + error_text[:200])
 
-          # Fix 2: Permission denied on gradlew
-          if "permission denied" in error_text and "gradlew" in error_text:
-              print("🔧 Fixing: gradlew permission")
-              subprocess.run(["chmod", "+x", "gradlew"], check=False)
-              fixed = True
+          # Output formatted
+          print("::group::🔍 Error Analysis")
+          print(f"Error type: {error_type}")
+          print("\n📌 Suggestions:")
+          for s in suggestions:
+              print(f"  - {s}")
+          print("::endgroup::")
 
-          # Fix 3: Java version mismatch
-          if "java version" in error_text or "unsupported class file version" in error_text:
-              print("🔧 Fixing: Java version")
-              # Write .java-version file for future builds
-              with open(".java-version", "w") as f:
-                  f.write("21")
-              fixed = True
-
-          # Fix 4: Android SDK missing
-          if "sdk.dir" in error_text or "android sdk" in error_text:
-              print("🔧 Fixing: Android SDK path")
-              with open("local.properties", "w") as f:
-                  f.write("sdk.dir=$ANDROID_HOME")
-              fixed = True
-
-          # Fix 5: CMake not found
-          if "cmake" in error_text and "not found" in error_text:
-              print("🔧 Fixing: CMake installation issue")
-              subprocess.run(["sudo", "apt", "update"], check=False)
-              subprocess.run(["sudo", "apt", "install", "-y", "cmake"], check=False)
-              fixed = True
-
-          # Fix 6: Outdated NDK
-          if "ndk" in error_text and "not found" in error_text:
-              print("🔧 Fixing: NDK installation")
-              # Add NDK setup to workflow (we'll modify YAML)
-              with open(".github/workflows/build.yml", "r") as f:
-                  content = f.read()
-              if "android-actions/setup-android" not in content:
-                  # Insert NDK setup step after Java setup
-                  new_step = '''
-      - name: Setup Android NDK
-        uses: nttld/setup-ndk@v1
-        with:
-          ndk-version: r26c
-'''
-                  content = content.replace("steps:", "steps:\n" + new_step)
-                  with open(".github/workflows/build.yml", "w") as f:
-                      f.write(content)
-                  fixed = True
-
-          # Fix 7: Gradle cache corruption
-          if "cache" in error_text and "corrupt" in error_text:
-              print("🔧 Fixing: Clear Gradle cache")
-              subprocess.run(["rm", "-rf", "~/.gradle/caches/"], check=False)
-              fixed = True
-
-          # Output result
+          # Save to output for later steps
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-              f.write(f"fixed={str(fixed).lower()}\n")
+              f.write(f"error_type={error_type}\n")
+              f.write(f"suggestions={chr(10).join(suggestions)}\n")
           EOF
 
-          python3 auto_fix.py
+          python3 analyze.py
         env:
-          ERROR_SUMMARY: ${{ steps.error.outputs.error_summary }}
+          ERROR_TEXT: ${{ steps.fetch_logs.outputs.error_log }}
 
-      - name: Commit fixes if any
-        if: steps.fix.outputs.fixed == 'true'
-        run: |
-          git config user.name "Auto-Fix Bot 🤖"
-          git config user.email "auto-fix-bot@github.com"
-          git add .
-          git diff --staged --quiet || git commit -m "🤖 Auto-fix: ${ERROR_SUMMARY}" \
-            -m "Fixed automatically by error recovery bot"
-          git push origin HEAD:${{ github.ref_name }}
+      - name: Find or create PR comment with suggestions
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const errorType = process.env.ERROR_TYPE;
+            const suggestions = process.env.SUGGESTIONS;
+            const runId = process.env.RUN_ID;
+            
+            // Get the PR number (if this run is from a PR)
+            const { data: runs } = await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: runId
+            });
+            const prNumber = runs.pull_requests?.[0]?.number;
+            
+            if (prNumber) {
+              // Post a comment on the PR
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body: `## 🤖 Error Analysis Bot\n\n**Error category:** ${errorType}\n\n**Suggestions:**\n${suggestions.replace(/\n/g, '\n')}\n\n> Auto-detected from build run: ${runId}`
+              });
+            } else {
+              // Write to workflow summary
+              const summary = `
+  ### 🤖 Error Analysis
+  **Error category:** ${errorType}
+  **Suggestions:**
+  ${suggestions}
+  `;
+              require('fs').appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
+            }
         env:
-          ERROR_SUMMARY: ${{ steps.error.outputs.error_summary }}
-
-      - name: Re-trigger main workflow
-        if: steps.fix.outputs.fixed == 'true'
-        run: |
-          curl -L -X POST \
-            -H "Accept: application/vnd.github.v3+json" \
-            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            https://api.github.com/repos/${{ github.repository }}/actions/workflows/build.yml/dispatches \
-            -d '{"ref":"${{ github.ref_name }}"}'
+          ERROR_TYPE: ${{ steps.analyze.outputs.error_type }}
+          SUGGESTIONS: ${{ steps.analyze.outputs.suggestions }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
