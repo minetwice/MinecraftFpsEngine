@@ -3,16 +3,19 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+val version = project.properties["mod_version"] as String? ?: "1.0.0"
+val versionCode = (project.properties["app_version_code"] as String? ?: "1").toInt()
+
 android {
     namespace = "com.minefilter.launcher"
-    compileSdk = 34
+    compileSdk = project.properties["android.compileSdk"] as String?.toInt() ?: 34
 
     defaultConfig {
         applicationId = "com.minefilter.launcher"
-        minSdk = 24
-        targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        minSdk = project.properties["android.minSdk"] as String?.toInt() ?: 24
+        targetSdk = project.properties["android.targetSdk"] as String?.toInt() ?: 34
+        versionCode = versionCode
+        versionName = version
 
         externalNativeBuild {
             cmake {
@@ -46,6 +49,6 @@ android {
 }
 
 dependencies {
-    implementation("androidx.appcompat:appcompat:1.6.1")
-    implementation("com.google.android.material:material:1.10.0")
+    implementation("androidx.appcompat:appcompat:${project.properties["appcompat_version"]}")
+    implementation("com.google.android.material:material:${project.properties["material_version"]}")
 }
