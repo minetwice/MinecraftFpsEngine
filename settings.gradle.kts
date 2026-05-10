@@ -6,4 +6,4 @@ pluginManagement {
     }
 }
 rootProject.name = "MinecraftFpsEngine"
-include(":app")
+include(":app")   // Remove :mod if present
